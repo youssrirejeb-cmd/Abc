@@ -649,7 +649,7 @@ def build_tracker(ws):
         "measured back from their anchor milestone instead.", "Workbook")
 
     widths(ws, {"A": 34, "B": 11, "C": 12, "D": 26, "E": 20, "F": 18, "G": 16,
-                "H": 24, "I": 13, "J": 14, "K": 14, "L": 9, "M": 14, "N": 10,
+                "H": 24, "I": 13, "J": 16, "K": 16, "L": 9, "M": 16, "N": 10,
                 "O": 15, "P": 24, "Q": 30,
                 "R": 12, "S": 12, "T": 8, "U": 8, "V": 9, "W": 16,
                 "X": 11, "Y": 11, "Z": 11})
