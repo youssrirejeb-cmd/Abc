@@ -18,7 +18,8 @@ from openpyxl.chart import BarChart, DoughnutChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.comments import Comment
 from openpyxl.formatting.rule import DataBarRule, FormulaRule
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import (Alignment, Border, Font, PatternFill, Protection,
+                             Side)
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -240,6 +241,8 @@ a_w = Alignment(horizontal="left", vertical="center", wrap_text=True)
 a_h = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 FMT_DATE = "DD-MMM-YYYY"
+# same, but a zero or negative serial shows as blank instead of ###### / 00-Jan-1900
+FMT_DATE0 = "DD-MMM-YYYY;;"
 FMT_PCT = "0%"
 FMT_PCT1 = "0.0%"
 FMT_INT = "#,##0;-#,##0;-"
@@ -278,12 +281,16 @@ def lab(ws, row, col, text, note=None, small=False):
     return c
 
 
+UNLOCKED = Protection(locked=False)
+
+
 def inp(ws, row, col, value=None, fmt=None, small=False):
     c = ws.cell(row=row, column=col, value=value)
     c.font = f_in9 if small else f_in
     c.fill = fill_white
     c.border = box
     c.alignment = a_l
+    c.protection = UNLOCKED
     if fmt:
         c.number_format = fmt
     return c
@@ -324,6 +331,7 @@ def inputs(ws, c1, c2, r1, r2, fmts=None):
             c.font = f_body
             c.border = box
             c.alignment = a_l
+            c.protection = UNLOCKED
             if fmts and col in fmts:
                 c.number_format = fmts[col]
 
@@ -353,12 +361,15 @@ def build_setup(ws, demo):
     ws.sheet_properties.tabColor = NAVY
     ws.sheet_view.showGridLines = False
     widths(ws, {"A": 2, "B": 44, "C": 22, "D": 20, "E": 20, "F": 18, "G": 16,
-                "H": 14, "I": 14, "J": 14, "K": 12, "L": 18, "M": 30, "N": 12})
+                "H": 14, "I": 14, "J": 14, "K": 12, "L": 18, "M": 30, "N": 12,
+                "O": 12})
 
     ws["B1"] = "SETUP - CONTROL PANEL"
     ws["B1"].font = f_title
     ws["B2"] = ("Everything in the workbook is driven from this sheet. Blue cells are yours to "
-                "edit; grey cells calculate themselves. Nothing else needs rebuilding.")
+                "edit; grey cells calculate themselves. To drop a status code, a milestone or "
+                "a document type, CLEAR the cells - never delete the row: the rest of the "
+                "workbook is addressed by row and deleting one breaks it.")
     ws["B2"].font = f_sub
 
     # 1 - CONTRACT ----------------------------------------------------------
@@ -387,8 +398,13 @@ def build_setup(ws, demo):
         ws.merge_cells(start_row=TH_TOP + i, start_column=4,
                        end_row=TH_TOP + i, end_column=7)
     lab(ws, TH_TOP + 3, 2, "Earliest commissioning start (calculated)")
-    calc(ws, TH_TOP + 3, 3, f"=IFERROR(SMALL(EQP_START,1),\"\")", FMT_DATE,
-         note="Earliest planned commissioning start across all equipment in section 7. "
+    # smallest strictly positive value: EQP_EFF holds 0 for equipment with no date,
+    # and zeros sort first, so skip exactly as many of them as there are
+    calc(ws, TH_TOP + 3, 3,
+         '=IF(COUNTIF(EQP_EFF,">0")=0,"",SMALL(EQP_EFF,COUNTIF(EQP_EFF,"<=0")+1))',
+         FMT_DATE,
+         note="Earliest commissioning start across all equipment in section 7 - the actual "
+              "start where one is filled in, the planned start otherwise. "
               "Every 'Commissioning Start' anchored target date ultimately derives from "
               "the start date of whatever the document covers, not from this single figure.")
     n = ws.cell(row=TH_TOP + 3, column=4,
@@ -458,9 +474,9 @@ def build_setup(ws, demo):
     for r in range(SYS_TOP, SYS_BOT + 1):
         # earliest equipment start, without MINIFS (Excel 2016 compatible)
         calc(ws, r, 5,
-             f'=IF($B{r}="","",IF(COUNTIFS(EQP_SYS,$B{r},EQP_START,">0")=0,"",'
-             f'SUMPRODUCT(MIN((EQP_SYS=$B{r})*(EQP_START>0)*EQP_START'
-             f'+((EQP_SYS=$B{r})*(EQP_START>0)=0)*2958465))))', FMT_DATE)
+             f'=IF($B{r}="","",IF(COUNTIFS(EQP_SYS,$B{r},EQP_EFF,">0")=0,"",'
+             f'SUMPRODUCT(MIN((EQP_SYS=$B{r})*(EQP_EFF>0)*EQP_EFF'
+             f'+((EQP_SYS=$B{r})*(EQP_EFF>0)=0)*2958465))))', FMT_DATE)
         calc(ws, r, 6, f'=IF($B{r}="","",COUNTIF(EQP_SYS,$B{r}))', FMT_INT)
         calc(ws, r, 7, f'=IF($B{r}="","",COUNTIFS(DOC_SYS,$B{r},DOC_ACTIVE,1))', FMT_INT)
         calc(ws, r, 8, f'=IF($B{r}="","",COUNTIFS(DOC_SYS,$B{r},DOC_DONE,1))', FMT_INT)
@@ -484,10 +500,14 @@ def build_setup(ws, demo):
     header(ws, EQP_HDR, 2, ["Parent system", "Equipment", "Planned comm. start",
                             "Planned comm. finish", "Actual start", "Actual finish",
                             "Docs", "Done", "Late", "Core missing", "% done",
-                            "Status", "Key"])
+                            "Status", "Key", "Start used"])
     inputs(ws, 2, 7, EQP_TOP, EQP_BOT,
            fmts={4: FMT_DATE, 5: FMT_DATE, 6: FMT_DATE, 7: FMT_DATE})
     for r in range(EQP_TOP, EQP_BOT + 1):
+        # the single date every target date behind this equipment is measured from:
+        # the actual start once it is known, the planned start until then, 0 if neither
+        calc(ws, r, 15,
+             f'=IF($C{r}="",0,IF($F{r}<>"",$F{r},IF($D{r}<>"",$D{r},0)))', FMT_DATE0)
         calc(ws, r, 8, f'=IF($C{r}="","",COUNTIFS(DOC_EQP,$C{r},DOC_ACTIVE,1))', FMT_INT)
         calc(ws, r, 9, f'=IF($C{r}="","",COUNTIFS(DOC_EQP,$C{r},DOC_DONE,1))', FMT_INT)
         calc(ws, r, 10, f'=IF($C{r}="","",COUNTIFS(DOC_EQP,$C{r},DOC_STATE,S_LATE))', FMT_INT)
@@ -504,6 +524,11 @@ def build_setup(ws, demo):
              f'+ROW()/1000000)')
     databar(ws, f"L{EQP_TOP}:L{EQP_BOT}", "63BE7B")
     ws.column_dimensions["N"].hidden = True
+    ws.column_dimensions["O"].hidden = True
+    ws.cell(row=EQP_HDR, column=6).comment = Comment(
+        "Fill this in when the equipment actually starts commissioning. From that moment "
+        "every target date behind this equipment is measured from the actual start "
+        "instead of the planned one.", "Workbook")
 
     # 8 - DOCUMENT TYPE LIBRARY ---------------------------------------------
     section(ws, BAN["typ"], 2, 9, "8 - DOCUMENT TYPE LIBRARY")
@@ -549,16 +574,47 @@ def build_setup(ws, demo):
     dv(ws, "COUNTS_AS", f"D{WF_TOP}:D{WF_BOT}")
     ws.freeze_panes = "A4"
 
+    # Every blue cell stays editable; what is blocked is inserting or deleting
+    # rows and columns, which is what silently breaks the named ranges the rest
+    # of the workbook is built on. No password - Review > Unprotect Sheet lifts
+    # it for anyone who really means to restructure the sheet.
+    ws.protection.sheet = True
+    ws.protection.insertRows = True
+    ws.protection.deleteRows = True
+    ws.protection.insertColumns = True
+    ws.protection.deleteColumns = True
+    ws.protection.formatCells = False
+    ws.protection.formatColumns = False
+    ws.protection.formatRows = False
+    ws.protection.sort = False
+    ws.protection.autoFilter = False
+    ws.protection.selectLockedCells = False
+    ws.protection.selectUnlockedCells = False
+
 
 # ===========================================================================
 # TRACKER  (flat table - one row per document x what it covers)
 # ===========================================================================
 TRK_COLS = ["Type", "Scope", "System", "Equipment", "Document no.",
+            "Teamcenter no.", "Rev.",
             "Responsible (drafting)", "Approver", "Status", "Actual start",
             "Target override", "Target approval", "Source", "Actual approval",
             "Days late", "State", "Check", "Comment"]
 TRK_HELP = ["Scope date", "Auto target", "Active", "Done", "Inactive", "Phase",
             "k late", "k wip", "k coming"]
+
+# Column letters, so a new column can be inserted without hand-editing formulas.
+K_TYPE, K_SCOPE, K_SYS, K_EQP = "A", "B", "C", "D"
+K_NUM, K_TCN, K_REV = "E", "F", "G"
+K_RESP, K_APPR, K_STAT = "H", "I", "J"
+K_ASTART, K_OVR, K_TARGET = "K", "L", "M"
+K_SRC, K_AAPPR, K_DAYS = "N", "O", "P"
+K_STATE, K_CHECK, K_CMT = "Q", "R", "S"
+K_SDATE, K_AUTO, K_ACTIVE = "T", "U", "V"
+K_DONE, K_INACT, K_PHASE = "W", "X", "Y"
+K_KLATE, K_KWIP, K_KCOME = "Z", "AA", "AB"
+N_TRK_VIS = len(TRK_COLS)                     # 19 -> A..S
+TRK_HELP_C = 20                               # first helper column (T)
 
 
 def build_tracker(ws):
@@ -571,131 +627,160 @@ def build_tracker(ws):
                 "negative = float.")
     ws["A2"].font = f_sub
     header(ws, 3, 1, TRK_COLS)
-    header(ws, 3, 18, TRK_HELP)
+    header(ws, 3, TRK_HELP_C, TRK_HELP)
 
-    inputs(ws, 1, 10, TRK_TOP, TRK_BOT, fmts={9: FMT_DATE, 10: FMT_DATE})
-    inputs(ws, 13, 13, TRK_TOP, TRK_BOT, fmts={13: FMT_DATE})
-    inputs(ws, 17, 17, TRK_TOP, TRK_BOT)
+    inputs(ws, 1, 12, TRK_TOP, TRK_BOT, fmts={11: FMT_DATE, 12: FMT_DATE})
+    inputs(ws, 15, 15, TRK_TOP, TRK_BOT, fmts={15: FMT_DATE})
+    inputs(ws, 19, 19, TRK_TOP, TRK_BOT)
 
     T = TRK_TOP, TRK_BOT
     # --- helper columns ---------------------------------------------------
-    down(ws, 18, *T,
-         '=IF(OR($A{r}="",$B{r}=""),"",'
-         'IF($B{r}="Equipment",IFERROR(INDEX(EQP_START,MATCH($D{r},EQP_NOM,0)),""),'
-         'IF($B{r}="System",IFERROR(INDEX(SYS_EARLIEST,MATCH($C{r},SYS_ID,0)),""),'
-         'IF($B{r}="All",CTR_EARLIEST,""))))', FMT_DATE)
-    down(ws, 19, *T,
-         '=IF(OR($A{r}="",$E{r}=""),"",IFERROR('
-         'IF(INDEX(TYP_ANCHOR,MATCH($A{r},TYP_TYPE,0))="Commissioning Start",'
-         'IF($R{r}="","",$R{r}-INDEX(TYP_LEAD,MATCH($A{r},TYP_TYPE,0))),'
-         'IF(INDEX(MS_PLAN,MATCH(INDEX(TYP_ANCHOR,MATCH($A{r},TYP_TYPE,0)),MS_NOM,0))="","",'
-         'INDEX(MS_PLAN,MATCH(INDEX(TYP_ANCHOR,MATCH($A{r},TYP_TYPE,0)),MS_NOM,0))'
-         '-INDEX(TYP_LEAD,MATCH($A{r},TYP_TYPE,0)))),""))', FMT_DATE)
-    down(ws, 22, *T,
-         '=IF(OR($A{r}="",$E{r}=""),0,'
-         'IF(IFERROR(INDEX(WF_CLASS,MATCH($H{r},WF_CODE,0)),"")="Inactive",1,0))', FMT_INT)
+    # Scope date: always numeric. 0 means "no start date known for what this row
+    # covers" - never "" and never a bare INDEX, because INDEX on a blank cell
+    # returns 0 and 0-lead is a negative serial, which Excel renders as ######.
     down(ws, 20, *T,
-         '=IF(OR($A{r}="",$E{r}=""),0,IF($V{r}=1,0,1))', FMT_INT)
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_SCOPE}{{r}}=""),"",'
+         f'IF(${K_SCOPE}{{r}}="Equipment",'
+         f'N(IFERROR(INDEX(EQP_EFF,MATCH(${K_EQP}{{r}},EQP_NOM,0)),0)),'
+         f'IF(${K_SCOPE}{{r}}="System",'
+         f'N(IFERROR(INDEX(SYS_EARLIEST,MATCH(${K_SYS}{{r}},SYS_ID,0)),0)),'
+         f'IF(${K_SCOPE}{{r}}="All",N(CTR_EARLIEST),0))))', FMT_DATE0)
     down(ws, 21, *T,
-         '=IF($T{r}=0,0,IF($M{r}<>"",1,'
-         'IF(IFERROR(INDEX(WF_CLASS,MATCH($H{r},WF_CODE,0)),"")="Done",1,0)))', FMT_INT)
-    down(ws, 23, *T,
-         '=IF($A{r}="","",IFERROR(INDEX(TYP_PHASE,MATCH($A{r},TYP_TYPE,0)),"-"))')
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IFERROR('
+         f'IF(INDEX(TYP_ANCHOR,MATCH(${K_TYPE}{{r}},TYP_TYPE,0))="Commissioning Start",'
+         f'IF(N(${K_SDATE}{{r}})<=0,"",'
+         f'${K_SDATE}{{r}}-INDEX(TYP_LEAD,MATCH(${K_TYPE}{{r}},TYP_TYPE,0))),'
+         f'IF(N(INDEX(MS_PLAN,MATCH(INDEX(TYP_ANCHOR,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),'
+         f'MS_NOM,0)))<=0,"",'
+         f'INDEX(MS_PLAN,MATCH(INDEX(TYP_ANCHOR,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),MS_NOM,0))'
+         f'-INDEX(TYP_LEAD,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)))),""))', FMT_DATE0)
     down(ws, 24, *T,
-         '=IF(AND($T{r}=1,$U{r}=0,N($N{r})>0),$N{r}+ROW()/1000000,"")')
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),0,'
+         f'IF(IFERROR(INDEX(WF_CLASS,MATCH(${K_STAT}{{r}},WF_CODE,0)),"")="Inactive",1,0))',
+         FMT_INT)
+    down(ws, 22, *T,
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),0,IF(${K_INACT}{{r}}=1,0,1))', FMT_INT)
+    down(ws, 23, *T,
+         f'=IF(${K_ACTIVE}{{r}}=0,0,IF(${K_AAPPR}{{r}}<>"",1,'
+         f'IF(IFERROR(INDEX(WF_CLASS,MATCH(${K_STAT}{{r}},WF_CODE,0)),"")="Done",1,0)))',
+         FMT_INT)
     down(ws, 25, *T,
-         '=IF(AND($T{r}=1,$U{r}=0,OR($I{r}<>"",N($N{r})>0)),N($N{r})+ROW()/1000000,"")')
+         f'=IF(${K_TYPE}{{r}}="","",'
+         f'IFERROR(INDEX(TYP_PHASE,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),"-"))')
     down(ws, 26, *T,
-         '=IF(AND($T{r}=1,$U{r}=0,$I{r}="",N($N{r})<=0,-N($N{r})<=HORIZON),'
-         'N($N{r})+ROW()/1000000,"")')
+         f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,N(${K_DAYS}{{r}})>0),'
+         f'${K_DAYS}{{r}}+ROW()/1000000,"")')
+    down(ws, 27, *T,
+         f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,'
+         f'OR(${K_ASTART}{{r}}<>"",N(${K_DAYS}{{r}})>0)),N(${K_DAYS}{{r}})+ROW()/1000000,"")')
+    down(ws, 28, *T,
+         f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,${K_ASTART}{{r}}="",'
+         f'N(${K_DAYS}{{r}})<=0,-N(${K_DAYS}{{r}})<=HORIZON),'
+         f'N(${K_DAYS}{{r}})+ROW()/1000000,"")')
 
     # --- visible calculated columns ---------------------------------------
-    down(ws, 11, *T, '=IF($A{r}="","",IF($J{r}<>"",$J{r},$S{r}))', FMT_DATE)
-    down(ws, 12, *T,
-         '=IF(OR($A{r}="",$E{r}=""),"",IF($J{r}<>"","Manual",IF($S{r}="","-","Auto")))')
+    # the N()<=0 guard is what keeps a nonsense date out of a visible date cell
+    down(ws, 13, *T,
+         f'=IF(${K_TYPE}{{r}}="","",IF(${K_OVR}{{r}}<>"",${K_OVR}{{r}},'
+         f'IF(N(${K_AUTO}{{r}})<=0,"",${K_AUTO}{{r}})))', FMT_DATE)
     down(ws, 14, *T,
-         '=IF($T{r}=0,"",IF($U{r}=1,IF($M{r}="","",$M{r}-$K{r}),'
-         'IF($K{r}="","",TODAY()-$K{r})))', FMT_DAYS)
-    down(ws, 15, *T,
-         '=IF(OR($A{r}="",$E{r}=""),"",IF($V{r}=1,S_INACT,'
-         'IF(ISNA(MATCH($A{r},TYP_TYPE,0)),S_TYPEKO,'
-         'IF($U{r}=1,S_DONE,'
-         'IF(AND($K{r}="",$R{r}=""),S_NOSCOPE,'
-         'IF($K{r}="",S_NOTARGET,'
-         'IF($N{r}>0,S_LATE,'
-         'IF($I{r}<>"",S_WIP,'
-         'IF(-$N{r}<=FEN_DOC,S_RISK,'
-         'IF(-$N{r}<=HORIZON,S_COMING,S_NOTYET))))))))))')
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",'
+         f'IF(${K_OVR}{{r}}<>"","Manual",IF(N(${K_AUTO}{{r}})<=0,"-","Auto")))')
     down(ws, 16, *T,
-         '=IF(OR($A{r}="",$E{r}=""),"",IF($V{r}=1,"",'
-         'IF(ISNA(MATCH($A{r},TYP_TYPE,0)),"Type not in the library",'
-         'IF($B{r}="","Scope not set",'
-         'IF(AND($B{r}="System",$C{r}=""),"System not set",'
-         'IF(AND($B{r}="Equipment",$D{r}=""),"Equipment not set",'
-         'IF($F{r}="","Responsible not set",'
-         'IF($K{r}="","No target date",'
-         'IF(AND($B{r}="Equipment",$C{r}<>"",'
-         'IFERROR(INDEX(EQP_SYS,MATCH($D{r},EQP_NOM,0)),"")<>$C{r}),'
-         '"Equipment not in that system",'
-         'IF(AND($U{r}=1,$M{r}=""),"Approved with no approval date",""))))))))))')
+         f'=IF(${K_ACTIVE}{{r}}=0,"",IF(${K_DONE}{{r}}=1,'
+         f'IF(${K_AAPPR}{{r}}="","",${K_AAPPR}{{r}}-${K_TARGET}{{r}}),'
+         f'IF(${K_TARGET}{{r}}="","",TODAY()-${K_TARGET}{{r}})))', FMT_DAYS)
+    down(ws, 17, *T,
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IF(${K_INACT}{{r}}=1,S_INACT,'
+         f'IF(ISNA(MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),S_TYPEKO,'
+         f'IF(${K_DONE}{{r}}=1,S_DONE,'
+         f'IF(AND(${K_TARGET}{{r}}="",N(${K_SDATE}{{r}})<=0),S_NOSCOPE,'
+         f'IF(${K_TARGET}{{r}}="",S_NOTARGET,'
+         f'IF(${K_DAYS}{{r}}>0,S_LATE,'
+         f'IF(${K_ASTART}{{r}}<>"",S_WIP,'
+         f'IF(-${K_DAYS}{{r}}<=FEN_DOC,S_RISK,'
+         f'IF(-${K_DAYS}{{r}}<=HORIZON,S_COMING,S_NOTYET))))))))))')
+    down(ws, 18, *T,
+         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IF(${K_INACT}{{r}}=1,"",'
+         f'IF(ISNA(MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),"Type not in the library",'
+         f'IF(${K_SCOPE}{{r}}="","Scope not set",'
+         f'IF(AND(${K_SCOPE}{{r}}="System",${K_SYS}{{r}}=""),"System not set",'
+         f'IF(AND(${K_SCOPE}{{r}}="Equipment",${K_EQP}{{r}}=""),"Equipment not set",'
+         f'IF(${K_RESP}{{r}}="","Responsible not set",'
+         f'IF(${K_TARGET}{{r}}="","No commissioning start behind this row",'
+         f'IF(AND(${K_SCOPE}{{r}}="Equipment",${K_SYS}{{r}}<>"",'
+         f'IFERROR(INDEX(EQP_SYS,MATCH(${K_EQP}{{r}},EQP_NOM,0)),"")<>${K_SYS}{{r}}),'
+         f'"Equipment not in that system",'
+         f'IF(AND(${K_DONE}{{r}}=1,${K_AAPPR}{{r}}=""),'
+         f'"Approved with no approval date",""))))))))))')
 
-    ws.cell(row=3, column=10).comment = Comment(
+    ws.cell(row=3, column=6).comment = Comment(
+        "Teamcenter identifier of the document. Kept separate from the contract document "
+        "number so either can be searched on its own.", "Workbook")
+    ws.cell(row=3, column=7).comment = Comment(
+        "Revision of the document as it stands today - A, B, 01, 02, whatever your "
+        "numbering uses. Kept in its own column so the number never has to be retyped "
+        "when the revision moves on.", "Workbook")
+    ws.cell(row=3, column=12).comment = Comment(
         "Type a date here only when the automatic calculation cannot know something - a "
         "cross-system dependency, a site event. The Source column then reads Manual. "
         "Clear this cell to fall back to the automatic date.", "Workbook")
-    ws.cell(row=3, column=11).comment = Comment(
-        "Automatic = the commissioning start of whatever this row covers (actual if known, "
-        "otherwise planned), minus the lead time of the type. Post-commissioning types are "
-        "measured back from their anchor milestone instead.", "Workbook")
+    ws.cell(row=3, column=13).comment = Comment(
+        "Automatic = the commissioning start of whatever this row covers (actual start if "
+        "one is filled in on SETUP, otherwise the planned start), minus the lead time of "
+        "the type. Post-commissioning types are measured back from their anchor milestone "
+        "instead. Blank means no start date is set for what this row covers.", "Workbook")
 
-    widths(ws, {"A": 34, "B": 11, "C": 12, "D": 26, "E": 20, "F": 18, "G": 16,
-                "H": 24, "I": 13, "J": 16, "K": 16, "L": 9, "M": 16, "N": 10,
-                "O": 15, "P": 24, "Q": 30,
-                "R": 12, "S": 12, "T": 8, "U": 8, "V": 9, "W": 16,
-                "X": 11, "Y": 11, "Z": 11})
-    for col in "RSTUVWXYZ":
+    widths(ws, {"A": 34, "B": 11, "C": 12, "D": 26, "E": 20, "F": 18, "G": 7,
+                "H": 18, "I": 16, "J": 24, "K": 13, "L": 16, "M": 16, "N": 9,
+                "O": 16, "P": 10, "Q": 15, "R": 24, "S": 30,
+                "T": 12, "U": 12, "V": 8, "W": 8, "X": 9, "Y": 16,
+                "Z": 11, "AA": 11, "AB": 11})
+    for col in ("T", "U", "V", "W", "X", "Y", "Z", "AA", "AB"):
         ws.column_dimensions[col].hidden = True
 
-    dv(ws, "TYP_TYPE", f"A{TRK_TOP}:A{TRK_BOT}")
-    dv(ws, "SCOPE_LIST", f"B{TRK_TOP}:B{TRK_BOT}")
-    dv(ws, "SYS_ID", f"C{TRK_TOP}:C{TRK_BOT}")
-    dv(ws, "EQP_NOM", f"D{TRK_TOP}:D{TRK_BOT}")
-    dv(ws, "PPL_NAME", f"F{TRK_TOP}:F{TRK_BOT}")
-    dv(ws, "PPL_NAME", f"G{TRK_TOP}:G{TRK_BOT}")
-    dv(ws, "WF_CODE", f"H{TRK_TOP}:H{TRK_BOT}")
+    dv(ws, "TYP_TYPE", f"{K_TYPE}{TRK_TOP}:{K_TYPE}{TRK_BOT}")
+    dv(ws, "SCOPE_LIST", f"{K_SCOPE}{TRK_TOP}:{K_SCOPE}{TRK_BOT}")
+    dv(ws, "SYS_ID", f"{K_SYS}{TRK_TOP}:{K_SYS}{TRK_BOT}")
+    dv(ws, "EQP_NOM", f"{K_EQP}{TRK_TOP}:{K_EQP}{TRK_BOT}")
+    dv(ws, "PPL_NAME", f"{K_RESP}{TRK_TOP}:{K_RESP}{TRK_BOT}")
+    dv(ws, "PPL_NAME", f"{K_APPR}{TRK_TOP}:{K_APPR}{TRK_BOT}")
+    dv(ws, "WF_CODE", f"{K_STAT}{TRK_TOP}:{K_STAT}{TRK_BOT}")
 
     t = TRK_TOP
-    rng_all = f"A{TRK_TOP}:Q{TRK_BOT}"
+    rng_all = f"{K_TYPE}{TRK_TOP}:{K_CMT}{TRK_BOT}"
     # greying of cells that do not apply to this row's scope
-    ws.conditional_formatting.add(f"C{TRK_TOP}:C{TRK_BOT}", FormulaRule(
-        formula=[f'OR($B{t}="All",$B{t}="")'], fill=fill_grey, stopIfTrue=True))
-    ws.conditional_formatting.add(f"D{TRK_TOP}:D{TRK_BOT}", FormulaRule(
-        formula=[f'$B{t}<>"Equipment"'], fill=fill_grey, stopIfTrue=True))
+    ws.conditional_formatting.add(f"{K_SYS}{TRK_TOP}:{K_SYS}{TRK_BOT}", FormulaRule(
+        formula=[f'OR(${K_SCOPE}{t}="All",${K_SCOPE}{t}="")'],
+        fill=fill_grey, stopIfTrue=True))
+    ws.conditional_formatting.add(f"{K_EQP}{TRK_TOP}:{K_EQP}{TRK_BOT}", FormulaRule(
+        formula=[f'${K_SCOPE}{t}<>"Equipment"'], fill=fill_grey, stopIfTrue=True))
     # empty rows
     ws.conditional_formatting.add(rng_all, FormulaRule(
-        formula=[f'$A{t}=""'], fill=PatternFill("solid", fgColor="FAFAFA"),
+        formula=[f'${K_TYPE}{t}=""'], fill=PatternFill("solid", fgColor="FAFAFA"),
         stopIfTrue=True))
     # state colours
     for expr, colour, white in [
-        (f'$O{t}=S_LATE', C_RED_F, False),
-        (f'$O{t}=S_RISK', C_AMB_F, False),
-        (f'$O{t}=S_WIP', C_BLU_F, False),
-        (f'$O{t}=S_COMING', "FFF2CC", False),
-        (f'$O{t}=S_DONE', C_GRN_F, False),
-        (f'$O{t}=S_INACT', C_GRY_F, False),
-        (f'OR($O{t}=S_NOSCOPE,$O{t}=S_NOTARGET,$O{t}=S_TYPEKO)', C_ORA_F, False),
+        (f'${K_STATE}{t}=S_LATE', C_RED_F, False),
+        (f'${K_STATE}{t}=S_RISK', C_AMB_F, False),
+        (f'${K_STATE}{t}=S_WIP', C_BLU_F, False),
+        (f'${K_STATE}{t}=S_COMING', "FFF2CC", False),
+        (f'${K_STATE}{t}=S_DONE', C_GRN_F, False),
+        (f'${K_STATE}{t}=S_INACT', C_GRY_F, False),
+        (f'OR(${K_STATE}{t}=S_NOSCOPE,${K_STATE}{t}=S_NOTARGET,'
+         f'${K_STATE}{t}=S_TYPEKO)', C_ORA_F, False),
     ]:
         ws.conditional_formatting.add(rng_all, FormulaRule(
-            formula=[f'AND($A{t}<>"",{expr})'],
+            formula=[f'AND(${K_TYPE}{t}<>"",{expr})'],
             fill=PatternFill("solid", fgColor=colour), stopIfTrue=True))
     # data-quality flag
-    ws.conditional_formatting.add(f"P{TRK_TOP}:P{TRK_BOT}", FormulaRule(
-        formula=[f'$P{t}<>""'],
+    ws.conditional_formatting.add(f"{K_CHECK}{TRK_TOP}:{K_CHECK}{TRK_BOT}", FormulaRule(
+        formula=[f'${K_CHECK}{t}<>""'],
         fill=PatternFill("solid", fgColor=C_ORA_F),
         font=Font(name=FONT, size=9, bold=True, color="843C0C")))
 
-    ws.auto_filter.ref = f"A3:Q{TRK_BOT}"
-    ws.freeze_panes = "E4"
+    ws.auto_filter.ref = f"{K_TYPE}3:{K_CMT}{TRK_BOT}"
+    ws.freeze_panes = "F4"
 
 
 # ===========================================================================
@@ -848,18 +933,20 @@ def build_lists(ws):
     for i in range(N_TRK):
         r = CMB_TOP + i
         tr = TRK_TOP + i
-        ws.cell(row=r, column=12, value=f'=IF(TRACKER!$A{tr}="","","Document")')
+        ws.cell(row=r, column=12, value=f'=IF({TR}!${K_TYPE}{tr}="","","Document")')
         ws.cell(row=r, column=13, value=(
-            f'=IF($L{r}="","",TRACKER!$E{tr}&"  -  "&TRACKER!$A{tr})'))
+            f'=IF($L{r}="","",{TR}!${K_NUM}{tr}'
+            f'&IF({TR}!${K_REV}{tr}="",""," rev "&{TR}!${K_REV}{tr})'
+            f'&"  -  "&{TR}!${K_TYPE}{tr})'))
         ws.cell(row=r, column=14, value=(
-            f'=IF($L{r}="","",IF(TRACKER!$B{tr}="Equipment",TRACKER!$D{tr},'
-            f'IF(TRACKER!$B{tr}="System",TRACKER!$C{tr},"Whole contract")))'))
-        ws.cell(row=r, column=15, value=f'=IF($L{r}="","",TRACKER!$F{tr})')
-        ws.cell(row=r, column=16, value=f'=IF($L{r}="","",TRACKER!$K{tr})')
-        ws.cell(row=r, column=17, value=f'=IF($L{r}="","",TRACKER!$N{tr})')
-        ws.cell(row=r, column=18, value=f'=TRACKER!$Y{tr}')
-        ws.cell(row=r, column=19, value=f'=TRACKER!$Z{tr}')
-        ws.cell(row=r, column=20, value=f'=TRACKER!$X{tr}')
+            f'=IF($L{r}="","",IF({TR}!${K_SCOPE}{tr}="Equipment",{TR}!${K_EQP}{tr},'
+            f'IF({TR}!${K_SCOPE}{tr}="System",{TR}!${K_SYS}{tr},"Whole contract")))'))
+        ws.cell(row=r, column=15, value=f'=IF($L{r}="","",{TR}!${K_RESP}{tr})')
+        ws.cell(row=r, column=16, value=f'=IF($L{r}="","",{TR}!${K_TARGET}{tr})')
+        ws.cell(row=r, column=17, value=f'=IF($L{r}="","",{TR}!${K_DAYS}{tr})')
+        ws.cell(row=r, column=18, value=f'={TR}!${K_KWIP}{tr}')
+        ws.cell(row=r, column=19, value=f'={TR}!${K_KCOME}{tr}')
+        ws.cell(row=r, column=20, value=f'={TR}!${K_KLATE}{tr}')
     for j in range(N_ACT):
         r = CMB_TOP + N_TRK + j
         ar = ACT_TOP + j
@@ -943,6 +1030,25 @@ def build_dashboard(ws):
     ws["B2"] = ('=IF(CTR_NAME="","Set the contract name in SETUP",CTR_NAME&"   -   "&CTR_NUM)'
                 '&"     |     what is late, what has never been created, what is coming."')
     ws["B2"].font = f_sub
+
+    # Integrity banner. Every list on this sheet is wrapped in IFERROR, so a
+    # broken name would otherwise show as an empty list rather than as a fault.
+    ws.merge_cells("B3:M3")
+    warn = ws["B3"]
+    warn.value = (
+        '=IF(ISERROR(S_DONE&S_LATE&S_WIP&S_RISK&S_COMING&S_NOTYET&S_INACT'
+        '&S_NOSCOPE&S_NOTARGET&S_TYPEKO&S_NODUE&S_ONTRACK'
+        '&A_OPEN&A_WIP&A_HOLD&A_DONE&RAG_RED&RAG_AMB&RAG_GRN'
+        '&N(FEN_DOC)&N(FEN_ACT)&N(HORIZON)),'
+        '"SETUP IS DAMAGED - a row was deleted on the SETUP sheet, so the wording or '
+        'threshold cells the whole workbook reads have been lost. The lists below are '
+        'blank because of it, not because there is nothing to show. Undo the deletion '
+        '(Ctrl+Z), or reopen the last saved copy.","")')
+    warn.font = Font(name=FONT, size=11, bold=True, color="FFFFFF")
+    warn.alignment = a_l
+    ws.conditional_formatting.add("B3:M3", FormulaRule(
+        formula=['$B$3<>""'], fill=PatternFill("solid", fgColor=C_RED),
+        stopIfTrue=True))
 
     # --- contract status ---------------------------------------------------
     section(ws, 4, 2, 13, "CONTRACT STATUS")
@@ -1210,9 +1316,15 @@ def build_how(ws):
 
         ("SECTION", "START HERE", None),
         ("1. Contract and thresholds", "SETUP sections 1 and 2.", None),
-        ("2. Systems and equipment", "SETUP sections 6 and 7. The planned commissioning start "
-                                     "you type against each equipment item is what drives every "
-                                     "target date behind it.", None),
+        ("2. Systems and equipment", "SETUP sections 6 and 7. The commissioning start you type "
+                                     "against each equipment item is what drives every target "
+                                     "date behind it. Fill Actual start when the item really "
+                                     "starts: from then on every target behind it is measured "
+                                     "from the actual date instead of the planned one, and the "
+                                     "hidden 'Start used' column shows which of the two is in "
+                                     "force. Equipment with neither date leaves its documents "
+                                     "with a blank target and the Check column explains why.",
+         None),
         ("3. Check the type library", "SETUP section 8. Phase, anchor milestone, lead time, "
                                       "core (ATS) flag and default scope for each type.", None),
         ("4. Enter deliverables", "TRACKER. Pick a Type and a Scope; the target date appears.", None),
@@ -1220,6 +1332,10 @@ def build_how(ws):
                               "together.", None),
 
         ("SECTION", "READING THE TRACKER", None),
+        ("Document no. / Teamcenter no. / Rev.",
+         "Three separate columns on purpose. The contract document number and the Teamcenter "
+         "identifier each stay searchable on their own, and the revision moves on without the "
+         "number ever being retyped. Filter or sort on any of them.", None),
         ("Target override", "Type a date to force a target the calculation cannot know - a "
                             "cross-system dependency, a site event. The Source column then reads "
                             "Manual. Clear the cell to fall back to Auto.", None),
@@ -1247,6 +1363,18 @@ def build_how(ws):
                     "by when each would have been needed.", None),
         ("Covered by", "A system-wide or contract-wide document counts as coverage for the "
                        "equipment beneath it. Inactive documents do not count as coverage.", None),
+
+        ("SECTION", "NEVER DELETE A ROW ON SETUP", None),
+        ("Why", "The rest of the workbook reads SETUP by position. Deleting a row there - a "
+                "status code, a milestone, a wording line - destroys the reference and the "
+                "dashboard lists go blank without saying why. SETUP is therefore protected "
+                "against inserting and deleting rows and columns. Every blue cell stays "
+                "editable as normal.", None),
+        ("To drop a status code", "Clear the cells on that line instead. An empty line is "
+                                  "simply ignored everywhere.", None),
+        ("If you really must", "Review > Unprotect Sheet - there is no password. If a deletion "
+                               "does break something, a red banner appears at the top of the "
+                               "DASHBOARD instead of the lists silently emptying.", None),
 
         ("SECTION", "CAPACITY AND LIMITS", None),
         ("Rows", f"TRACKER {N_TRK} rows  -  ACTIONS {N_ACT}  -  systems {N_SYS}  -  "
@@ -1329,6 +1457,8 @@ def add_names(wb):
         "EQP_SYS": f"{SU}!$B${EQP_TOP}:$B${EQP_BOT}",
         "EQP_NOM": f"{SU}!$C${EQP_TOP}:$C${EQP_BOT}",
         "EQP_START": f"{SU}!$D${EQP_TOP}:$D${EQP_BOT}",
+        "EQP_ACTUAL": f"{SU}!$F${EQP_TOP}:$F${EQP_BOT}",
+        "EQP_EFF": f"{SU}!$O${EQP_TOP}:$O${EQP_BOT}",
         "EQP_DOCS": f"{SU}!$H${EQP_TOP}:$H${EQP_BOT}",
         "EQP_DONE": f"{SU}!$I${EQP_TOP}:$I${EQP_BOT}",
         "EQP_LATE": f"{SU}!$J${EQP_TOP}:$J${EQP_BOT}",
@@ -1347,16 +1477,18 @@ def add_names(wb):
         "ACT_STATUS_LIST": f"{SU}!$C${AST_TOP}:$C${AST_TOP + 3}",
         "PPL_NAME": f"{SU}!$B${PPL_TOP}:$B${PPL_BOT}",
         # TRACKER
-        "DOC_TYPE": f"{TR}!$A${TRK_TOP}:$A${TRK_BOT}",
-        "DOC_SCOPE": f"{TR}!$B${TRK_TOP}:$B${TRK_BOT}",
-        "DOC_SYS": f"{TR}!$C${TRK_TOP}:$C${TRK_BOT}",
-        "DOC_EQP": f"{TR}!$D${TRK_TOP}:$D${TRK_BOT}",
-        "DOC_NUM": f"{TR}!$E${TRK_TOP}:$E${TRK_BOT}",
-        "DOC_TARGET": f"{TR}!$K${TRK_TOP}:$K${TRK_BOT}",
-        "DOC_STATE": f"{TR}!$O${TRK_TOP}:$O${TRK_BOT}",
-        "DOC_CHECK": f"{TR}!$P${TRK_TOP}:$P${TRK_BOT}",
-        "DOC_ACTIVE": f"{TR}!$T${TRK_TOP}:$T${TRK_BOT}",
-        "DOC_DONE": f"{TR}!$U${TRK_TOP}:$U${TRK_BOT}",
+        "DOC_TYPE": f"{TR}!${K_TYPE}${TRK_TOP}:${K_TYPE}${TRK_BOT}",
+        "DOC_SCOPE": f"{TR}!${K_SCOPE}${TRK_TOP}:${K_SCOPE}${TRK_BOT}",
+        "DOC_SYS": f"{TR}!${K_SYS}${TRK_TOP}:${K_SYS}${TRK_BOT}",
+        "DOC_EQP": f"{TR}!${K_EQP}${TRK_TOP}:${K_EQP}${TRK_BOT}",
+        "DOC_NUM": f"{TR}!${K_NUM}${TRK_TOP}:${K_NUM}${TRK_BOT}",
+        "DOC_TCN": f"{TR}!${K_TCN}${TRK_TOP}:${K_TCN}${TRK_BOT}",
+        "DOC_REV": f"{TR}!${K_REV}${TRK_TOP}:${K_REV}${TRK_BOT}",
+        "DOC_TARGET": f"{TR}!${K_TARGET}${TRK_TOP}:${K_TARGET}${TRK_BOT}",
+        "DOC_STATE": f"{TR}!${K_STATE}${TRK_TOP}:${K_STATE}${TRK_BOT}",
+        "DOC_CHECK": f"{TR}!${K_CHECK}${TRK_TOP}:${K_CHECK}${TRK_BOT}",
+        "DOC_ACTIVE": f"{TR}!${K_ACTIVE}${TRK_TOP}:${K_ACTIVE}${TRK_BOT}",
+        "DOC_DONE": f"{TR}!${K_DONE}${TRK_TOP}:${K_DONE}${TRK_BOT}",
         # ACTIONS
         "ACT_ID": f"{AC}!$A${ACT_TOP}:$A${ACT_BOT}",
         "ACT_STATUS": f"{AC}!$K${ACT_TOP}:$K${ACT_BOT}",
@@ -1514,15 +1646,18 @@ def write_demo(wb):
     for i, (sysid, eq, off) in enumerate(DEMO_EQP):
         r = EQP_TOP + i
         base = today + dt.timedelta(days=dict((s[0], s[3]) for s in DEMO_SYS)[sysid] + off)
-        eq_start[eq] = base
         su.cell(row=r, column=2, value=sysid)
         su.cell(row=r, column=3, value=eq)
         c = su.cell(row=r, column=4, value=base); c.number_format = FMT_DATE
         c = su.cell(row=r, column=5, value=base + dt.timedelta(days=45))
         c.number_format = FMT_DATE
-        if base < today:
-            c = su.cell(row=r, column=6, value=base + dt.timedelta(days=3))
+        actual = base + dt.timedelta(days=3) if base < today else None
+        if actual:
+            c = su.cell(row=r, column=6, value=actual)
             c.number_format = FMT_DATE
+        # the workbook measures from the actual start once there is one, so seed
+        # the demo's own target dates from the same date it will use
+        eq_start[eq] = actual or base
 
     for i, (nm, role) in enumerate(DEMO_PPL):
         r = PPL_TOP + i
@@ -1560,21 +1695,23 @@ def write_demo(wb):
             tr.cell(row=row, column=4, value=eq)
         tr.cell(row=row, column=5,
                 value=f"DMIC-{key}-{ABBR.get(dtype,'DOC')}-{n:03d}")
-        tr.cell(row=row, column=6, value=DEMO_PPL[n % len(DEMO_PPL)][0])
-        tr.cell(row=row, column=7, value=DEMO_PPL[(n + 4) % len(DEMO_PPL)][0])
-        tr.cell(row=row, column=8, value=code)
+        tr.cell(row=row, column=6, value=f"TC-{6100000 + n * 37:07d}")
+        tr.cell(row=row, column=7, value="ABCDE"[min(4, (n % 7) // 2)])
+        tr.cell(row=row, column=8, value=DEMO_PPL[n % len(DEMO_PPL)][0])
+        tr.cell(row=row, column=9, value=DEMO_PPL[(n + 4) % len(DEMO_PPL)][0])
+        tr.cell(row=row, column=10, value=code)
         if code and not done:
             st = target - dt.timedelta(days=45 + (n % 20))
             if st <= today:
-                c = tr.cell(row=row, column=9, value=st); c.number_format = FMT_DATE
+                c = tr.cell(row=row, column=11, value=st); c.number_format = FMT_DATE
         if done:
             appr = target + dt.timedelta(days=(n % 11) - 5)
             if appr > today:
                 appr = today - dt.timedelta(days=n % 7)
-            c = tr.cell(row=row, column=13, value=appr); c.number_format = FMT_DATE
+            c = tr.cell(row=row, column=15, value=appr); c.number_format = FMT_DATE
         if n % 37 == 0:                       # a couple of cancelled documents
-            tr.cell(row=row, column=8, value="A2 - Superseded")
-            tr.cell(row=row, column=13, value=None)
+            tr.cell(row=row, column=10, value="A2 - Superseded")
+            tr.cell(row=row, column=15, value=None)
         row += 1
 
     for t in TYPES:
@@ -1593,9 +1730,9 @@ def write_demo(wb):
             eq_start[eq], MATURITY[sysid])
 
     # one deliberate override, to show the Source column working
-    tr.cell(row=TRK_TOP + 4, column=10,
+    tr.cell(row=TRK_TOP + 4, column=12,
             value=today + dt.timedelta(days=21)).number_format = FMT_DATE
-    tr.cell(row=TRK_TOP + 4, column=17,
+    tr.cell(row=TRK_TOP + 4, column=19,
             value="Target moved by agreement - waiting on the SYS-SG interface package.")
 
     acts = [
@@ -1685,8 +1822,9 @@ def write_example(wb):
 
     vals = {1: "Commissioning Procedure", 2: "Equipment", 3: "SYS-01",
             4: "EQ-001 Example equipment item", 5: "DMIC-SYS-01-CPR-001",
-            6: "B. Example", 7: "C. Example", 8: "W1 - Draft",
-            17: "EXAMPLE ROW - overwrite with your first deliverable"}
+            6: "TC-6100001", 7: "A",
+            8: "B. Example", 9: "C. Example", 10: "W1 - Draft",
+            19: "EXAMPLE ROW - overwrite with your first deliverable"}
     for col, v in vals.items():
         tr.cell(row=TRK_TOP, column=col, value=v).fill = tag
 

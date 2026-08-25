@@ -26,6 +26,29 @@ Post-commissioning types are measured back from their anchor milestone instead.
 
 Days late: positive = late, negative = float. One convention everywhere.
 
+The "actual if known" half is real: fill **Actual start** against an equipment
+item on SETUP and every target behind that item is measured from the actual date
+from then on. The hidden `Start used` column (SETUP, section 7) shows which of
+the two dates is in force. Equipment with neither date leaves its documents with
+a blank target, and the `Check` column says so in words.
+
+## Document identity
+
+Three separate columns on the TRACKER: **Document no.**, **Teamcenter no.** and
+**Rev.** Each stays searchable and filterable on its own, and a revision moves on
+without the number ever being retyped.
+
+## SETUP is protected against row deletion
+
+The rest of the workbook reads SETUP by position, so deleting a row there
+destroys a named reference and the dashboard lists go blank without saying why.
+SETUP is therefore protected against inserting and deleting rows and columns —
+every blue cell stays editable as normal. To drop a status code, clear the cells
+on that line; an empty line is ignored everywhere. There is no password, so
+Review → Unprotect Sheet lifts it for anyone who really means to restructure the
+sheet — and if a deletion does break a reference, a red banner appears at the top
+of the DASHBOARD rather than the lists silently emptying.
+
 ## Kept from v50
 
 - Per-coverage target dates (`All` / `System` / `Equipment`).
@@ -64,7 +87,15 @@ core types tracked for gaps 12.
 
 ## Verification
 
-Both files recalculate clean: 20 366 formulas, 0 errors (LibreOffice). All 40 734
-generated formulas checked for balanced parentheses. Roll-ups hand-checked
-against the source data: contract earliest start, target-date arithmetic, share
-late, and gap totals reconcile across contract / system / equipment levels.
+Both files recalculate clean: 20 447 formulas, 0 errors (LibreOffice). Roll-ups
+hand-checked against the source data: contract earliest start, target-date
+arithmetic, share late, and gap totals reconcile across contract / system /
+equipment levels.
+
+Additionally swept, in both files, for the two failure modes that produce a date
+cell no column width can fix: **0 cells holding a negative date serial** (what
+Excel renders as `######`) and **0 cells sitting on the 1900 epoch**. Every date
+that reaches a visible cell is guarded by an `N(...)<=0` test rather than a
+comparison against `""` — `INDEX` on a blank cell returns `0`, not `""`, and in
+Excel `0=""` is FALSE, so the old guard let `0 − lead` through as a negative
+serial.
