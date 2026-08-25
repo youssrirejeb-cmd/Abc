@@ -20,6 +20,7 @@ from openpyxl.comments import Comment
 from openpyxl.formatting.rule import DataBarRule, FormulaRule
 from openpyxl.styles import (Alignment, Border, Font, PatternFill, Protection,
                              Side)
+from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -30,38 +31,12 @@ TRK_TOP, N_TRK = 4, 500
 TRK_BOT = TRK_TOP + N_TRK - 1                 # 503
 ACT_TOP, N_ACT = 4, 150
 ACT_BOT = ACT_TOP + N_ACT - 1                 # 153
-N_SYS, N_EQP, N_PPL = 25, 80, 30
+N_SYS, N_EQP, N_PPL = 50, 80, 30
 N_MS_SLOT = 15
 N_CORE = 12                                   # core-type slots tracked for gaps
 LIST_ROWS = 10                                # rows per dashboard list
 
-# ---------------------------------------------------------------------------
-# SETUP geometry
-# ---------------------------------------------------------------------------
 SU = "SETUP"
-CT_TOP = 5                                    # 5..9   contract
-TH_TOP = 12                                   # 12..15 thresholds
-WD_TOP = 18                                   # 18..29 state wording
-RAG_TOP = 32                                  # 32..34
-AST_TOP = 37                                  # 37..40 action statuses
-N_WF = 24                                     # workflow codes in the library
-WF_HDR, WF_TOP = 43, 44                       # 44..67
-WF_BOT = WF_TOP + N_WF - 1
-MS_HDR, MS_TOP = 70, 71                       # 71..85
-MS_BOT = MS_TOP + N_MS_SLOT - 1
-SYS_HDR, SYS_TOP = 88, 89                     # 89..113
-SYS_BOT = SYS_TOP + N_SYS - 1
-EQP_HDR, EQP_TOP = 116, 117                   # 117..196
-EQP_BOT = EQP_TOP + N_EQP - 1
-TYP_HDR, TYP_TOP = 199, 200                   # 200..219
-TYP_BOT = TYP_TOP + 19
-PH_HDR, PH_TOP = 222, 223
-PH_BOT = 225
-PPL_HDR, PPL_TOP = 228, 229
-PPL_BOT = PPL_TOP + N_PPL - 1
-# section banner rows
-BAN = dict(contract=4, thresholds=11, wording=17, rag=31, actstat=36,
-           wf=42, ms=69, sys=87, eqp=115, typ=198, phase=221, ppl=227)
 
 # ---------------------------------------------------------------------------
 # LISTS geometry
@@ -188,6 +163,51 @@ TYPES = [
 
 PHASES = [("Pre-commissioning", 1), ("Commissioning", 2), ("Post-commissioning", 3)]
 SCOPES = ["All", "System", "Equipment"]
+
+# ---------------------------------------------------------------------------
+# SETUP geometry - each section's rows are derived from the row count of the
+# section above it, so bumping a capacity constant (N_SYS, N_EQP, N_MS_SLOT,
+# adding a WF_CODES or TYPES entry, ...) can never leave one section's data
+# overlapping the next section's banner the way a hand-maintained row number
+# eventually will.
+# ---------------------------------------------------------------------------
+def _section(top, n, header_row=False):
+    """(top row of this section) x (row count) -> (header row or None, data
+    top, data bottom, banner row of the NEXT section). One blank row always
+    separates a section's data from the next banner."""
+    hdr = top + 1 if header_row else None
+    data_top = top + 2 if header_row else top + 1
+    data_bot = data_top + n - 1
+    return hdr, data_top, data_bot, data_bot + 2
+
+
+BAN = {}
+b = 4
+BAN["contract"] = b
+_, CT_TOP, CT_BOT, b = _section(b, 5)
+BAN["thresholds"] = b
+_, TH_TOP, TH_BOT, b = _section(b, 4)
+BAN["wording"] = b
+_, WD_TOP, WD_BOT, b = _section(b, len(WORDING))
+BAN["rag"] = b
+_, RAG_TOP, RAG_BOT, b = _section(b, len(RAG_WORDING))
+BAN["actstat"] = b
+_, AST_TOP, AST_BOT, b = _section(b, len(ACTION_WORDING))
+BAN["wf"] = b
+N_WF = len(WF_CODES)
+WF_HDR, WF_TOP, WF_BOT, b = _section(b, N_WF, header_row=True)
+BAN["ms"] = b
+MS_HDR, MS_TOP, MS_BOT, b = _section(b, N_MS_SLOT, header_row=True)
+BAN["sys"] = b
+SYS_HDR, SYS_TOP, SYS_BOT, b = _section(b, N_SYS, header_row=True)
+BAN["eqp"] = b
+EQP_HDR, EQP_TOP, EQP_BOT, b = _section(b, N_EQP, header_row=True)
+BAN["typ"] = b
+TYP_HDR, TYP_TOP, TYP_BOT, b = _section(b, len(TYPES), header_row=True)
+BAN["phase"] = b
+PH_HDR, PH_TOP, PH_BOT, b = _section(b, len(PHASES), header_row=True)
+BAN["ppl"] = b
+PPL_HDR, PPL_TOP, PPL_BOT, b = _section(b, N_PPL, header_row=True)
 
 # ---------------------------------------------------------------------------
 # Styles
@@ -595,26 +615,28 @@ def build_setup(ws, demo):
 # ===========================================================================
 # TRACKER  (flat table - one row per document x what it covers)
 # ===========================================================================
-TRK_COLS = ["Type", "Scope", "System", "Equipment", "Document no.",
-            "Teamcenter no.", "Rev.",
-            "Responsible (drafting)", "Approver", "Status", "Actual start",
-            "Target override", "Target approval", "Source", "Actual approval",
-            "Days late", "State", "Check", "Comment"]
-TRK_HELP = ["Scope date", "Auto target", "Active", "Done", "Inactive", "Phase",
-            "k late", "k wip", "k coming"]
-
-# Column letters, so a new column can be inserted without hand-editing formulas.
-K_TYPE, K_SCOPE, K_SYS, K_EQP = "A", "B", "C", "D"
-K_NUM, K_TCN, K_REV = "E", "F", "G"
-K_RESP, K_APPR, K_STAT = "H", "I", "J"
-K_ASTART, K_OVR, K_TARGET = "K", "L", "M"
-K_SRC, K_AAPPR, K_DAYS = "N", "O", "P"
-K_STATE, K_CHECK, K_CMT = "Q", "R", "S"
-K_SDATE, K_AUTO, K_ACTIVE = "T", "U", "V"
-K_DONE, K_INACT, K_PHASE = "W", "X", "Y"
-K_KLATE, K_KWIP, K_KCOME = "Z", "AA", "AB"
-N_TRK_VIS = len(TRK_COLS)                     # 19 -> A..S
-TRK_HELP_C = 20                               # first helper column (T)
+# One ordered table drives every column letter and index below it - add, remove
+# or reorder a column here and every formula, width and hidden-column list in
+# build_tracker() follows without hand renumbering.
+TRK_FIELDS = [
+    ("TYPE", "Type"), ("SCOPE", "Scope"), ("SYS", "System"), ("EQP", "Equipment"),
+    ("TCN", "Teamcenter no."), ("REV", "Rev."),
+    ("RESP", "Responsible (drafting)"), ("APPR", "Approver"), ("STAT", "Status"),
+    ("ASTART", "Actual start"), ("OVR", "Target override"),
+    ("TARGET", "Target approval"), ("SRC", "Source"), ("AAPPR", "Actual approval"),
+    ("DAYS", "Days late"), ("STATE", "State"), ("CHECK", "Check"), ("CMT", "Comment"),
+    # helper columns - not shown, but addressed by name like the rest
+    ("SDATE", "Scope date"), ("AUTO", "Auto target"), ("ACTIVE", "Active"),
+    ("DONE", "Done"), ("INACT", "Inactive"), ("PHASE", "Phase"),
+    ("KLATE", "k late"), ("KWIP", "k wip"), ("KCOME", "k coming"),
+]
+N_TRK_VIS = 18                                # A..R are shown; the rest are helpers
+TRK_COLS = [label for _, label in TRK_FIELDS[:N_TRK_VIS]]
+TRK_HELP = [label for label in (l for _, l in TRK_FIELDS[N_TRK_VIS:])]
+TRK_IDX = {key: i + 1 for i, (key, _) in enumerate(TRK_FIELDS)}
+TRK_COL = {key: get_column_letter(i) for key, i in TRK_IDX.items()}
+globals().update({f"K_{key}": letter for key, letter in TRK_COL.items()})
+TRK_HELP_C = TRK_IDX["SDATE"]                 # first helper column
 
 
 def build_tracker(ws):
@@ -629,24 +651,28 @@ def build_tracker(ws):
     header(ws, 3, 1, TRK_COLS)
     header(ws, 3, TRK_HELP_C, TRK_HELP)
 
-    inputs(ws, 1, 12, TRK_TOP, TRK_BOT, fmts={11: FMT_DATE, 12: FMT_DATE})
-    inputs(ws, 15, 15, TRK_TOP, TRK_BOT, fmts={15: FMT_DATE})
-    inputs(ws, 19, 19, TRK_TOP, TRK_BOT)
+    I = TRK_IDX
+    inputs(ws, I["TYPE"], I["TARGET"] - 1, TRK_TOP, TRK_BOT,
+           fmts={I["ASTART"]: FMT_DATE, I["OVR"]: FMT_DATE})
+    inputs(ws, I["AAPPR"], I["AAPPR"], TRK_TOP, TRK_BOT, fmts={I["AAPPR"]: FMT_DATE})
+    inputs(ws, I["CMT"], I["CMT"], TRK_TOP, TRK_BOT)
 
     T = TRK_TOP, TRK_BOT
     # --- helper columns ---------------------------------------------------
-    # Scope date: always numeric. 0 means "no start date known for what this row
-    # covers" - never "" and never a bare INDEX, because INDEX on a blank cell
-    # returns 0 and 0-lead is a negative serial, which Excel renders as ######.
-    down(ws, 20, *T,
+    # A row "exists" once it has a Type - nothing else is required to compute a
+    # target date or a colour. Scope date: always numeric. 0 means "no start
+    # date known for what this row covers" - never "" and never a bare INDEX,
+    # because INDEX on a blank cell returns 0 and 0-lead is a negative serial,
+    # which Excel renders as ###### regardless of column width.
+    down(ws, I["SDATE"], *T,
          f'=IF(OR(${K_TYPE}{{r}}="",${K_SCOPE}{{r}}=""),"",'
          f'IF(${K_SCOPE}{{r}}="Equipment",'
          f'N(IFERROR(INDEX(EQP_EFF,MATCH(${K_EQP}{{r}},EQP_NOM,0)),0)),'
          f'IF(${K_SCOPE}{{r}}="System",'
          f'N(IFERROR(INDEX(SYS_EARLIEST,MATCH(${K_SYS}{{r}},SYS_ID,0)),0)),'
          f'IF(${K_SCOPE}{{r}}="All",N(CTR_EARLIEST),0))))', FMT_DATE0)
-    down(ws, 21, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IFERROR('
+    down(ws, I["AUTO"], *T,
+         f'=IF(${K_TYPE}{{r}}="","",IFERROR('
          f'IF(INDEX(TYP_ANCHOR,MATCH(${K_TYPE}{{r}},TYP_TYPE,0))="Commissioning Start",'
          f'IF(N(${K_SDATE}{{r}})<=0,"",'
          f'${K_SDATE}{{r}}-INDEX(TYP_LEAD,MATCH(${K_TYPE}{{r}},TYP_TYPE,0))),'
@@ -654,44 +680,44 @@ def build_tracker(ws):
          f'MS_NOM,0)))<=0,"",'
          f'INDEX(MS_PLAN,MATCH(INDEX(TYP_ANCHOR,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),MS_NOM,0))'
          f'-INDEX(TYP_LEAD,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)))),""))', FMT_DATE0)
-    down(ws, 24, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),0,'
+    down(ws, I["INACT"], *T,
+         f'=IF(${K_TYPE}{{r}}="",0,'
          f'IF(IFERROR(INDEX(WF_CLASS,MATCH(${K_STAT}{{r}},WF_CODE,0)),"")="Inactive",1,0))',
          FMT_INT)
-    down(ws, 22, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),0,IF(${K_INACT}{{r}}=1,0,1))', FMT_INT)
-    down(ws, 23, *T,
+    down(ws, I["ACTIVE"], *T,
+         f'=IF(${K_TYPE}{{r}}="",0,IF(${K_INACT}{{r}}=1,0,1))', FMT_INT)
+    down(ws, I["DONE"], *T,
          f'=IF(${K_ACTIVE}{{r}}=0,0,IF(${K_AAPPR}{{r}}<>"",1,'
          f'IF(IFERROR(INDEX(WF_CLASS,MATCH(${K_STAT}{{r}},WF_CODE,0)),"")="Done",1,0)))',
          FMT_INT)
-    down(ws, 25, *T,
+    down(ws, I["PHASE"], *T,
          f'=IF(${K_TYPE}{{r}}="","",'
          f'IFERROR(INDEX(TYP_PHASE,MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),"-"))')
-    down(ws, 26, *T,
+    down(ws, I["KLATE"], *T,
          f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,N(${K_DAYS}{{r}})>0),'
          f'${K_DAYS}{{r}}+ROW()/1000000,"")')
-    down(ws, 27, *T,
+    down(ws, I["KWIP"], *T,
          f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,'
          f'OR(${K_ASTART}{{r}}<>"",N(${K_DAYS}{{r}})>0)),N(${K_DAYS}{{r}})+ROW()/1000000,"")')
-    down(ws, 28, *T,
+    down(ws, I["KCOME"], *T,
          f'=IF(AND(${K_ACTIVE}{{r}}=1,${K_DONE}{{r}}=0,${K_ASTART}{{r}}="",'
          f'N(${K_DAYS}{{r}})<=0,-N(${K_DAYS}{{r}})<=HORIZON),'
          f'N(${K_DAYS}{{r}})+ROW()/1000000,"")')
 
     # --- visible calculated columns ---------------------------------------
     # the N()<=0 guard is what keeps a nonsense date out of a visible date cell
-    down(ws, 13, *T,
+    down(ws, I["TARGET"], *T,
          f'=IF(${K_TYPE}{{r}}="","",IF(${K_OVR}{{r}}<>"",${K_OVR}{{r}},'
          f'IF(N(${K_AUTO}{{r}})<=0,"",${K_AUTO}{{r}})))', FMT_DATE)
-    down(ws, 14, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",'
+    down(ws, I["SRC"], *T,
+         f'=IF(${K_TYPE}{{r}}="","",'
          f'IF(${K_OVR}{{r}}<>"","Manual",IF(N(${K_AUTO}{{r}})<=0,"-","Auto")))')
-    down(ws, 16, *T,
+    down(ws, I["DAYS"], *T,
          f'=IF(${K_ACTIVE}{{r}}=0,"",IF(${K_DONE}{{r}}=1,'
          f'IF(${K_AAPPR}{{r}}="","",${K_AAPPR}{{r}}-${K_TARGET}{{r}}),'
          f'IF(${K_TARGET}{{r}}="","",TODAY()-${K_TARGET}{{r}})))', FMT_DAYS)
-    down(ws, 17, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IF(${K_INACT}{{r}}=1,S_INACT,'
+    down(ws, I["STATE"], *T,
+         f'=IF(${K_TYPE}{{r}}="","",IF(${K_INACT}{{r}}=1,S_INACT,'
          f'IF(ISNA(MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),S_TYPEKO,'
          f'IF(${K_DONE}{{r}}=1,S_DONE,'
          f'IF(AND(${K_TARGET}{{r}}="",N(${K_SDATE}{{r}})<=0),S_NOSCOPE,'
@@ -700,8 +726,8 @@ def build_tracker(ws):
          f'IF(${K_ASTART}{{r}}<>"",S_WIP,'
          f'IF(-${K_DAYS}{{r}}<=FEN_DOC,S_RISK,'
          f'IF(-${K_DAYS}{{r}}<=HORIZON,S_COMING,S_NOTYET))))))))))')
-    down(ws, 18, *T,
-         f'=IF(OR(${K_TYPE}{{r}}="",${K_NUM}{{r}}=""),"",IF(${K_INACT}{{r}}=1,"",'
+    down(ws, I["CHECK"], *T,
+         f'=IF(${K_TYPE}{{r}}="","",IF(${K_INACT}{{r}}=1,"",'
          f'IF(ISNA(MATCH(${K_TYPE}{{r}},TYP_TYPE,0)),"Type not in the library",'
          f'IF(${K_SCOPE}{{r}}="","Scope not set",'
          f'IF(AND(${K_SCOPE}{{r}}="System",${K_SYS}{{r}}=""),"System not set",'
@@ -714,30 +740,32 @@ def build_tracker(ws):
          f'IF(AND(${K_DONE}{{r}}=1,${K_AAPPR}{{r}}=""),'
          f'"Approved with no approval date",""))))))))))')
 
-    ws.cell(row=3, column=6).comment = Comment(
-        "Teamcenter identifier of the document. Kept separate from the contract document "
-        "number so either can be searched on its own.", "Workbook")
-    ws.cell(row=3, column=7).comment = Comment(
+    ws.cell(row=3, column=I["TCN"]).comment = Comment(
+        "Teamcenter identifier of the document. Optional - a row lights up and counts "
+        "towards every total as soon as Type is filled in, whether or not this is set yet.",
+        "Workbook")
+    ws.cell(row=3, column=I["REV"]).comment = Comment(
         "Revision of the document as it stands today - A, B, 01, 02, whatever your "
-        "numbering uses. Kept in its own column so the number never has to be retyped "
-        "when the revision moves on.", "Workbook")
-    ws.cell(row=3, column=12).comment = Comment(
+        "numbering uses. Kept in its own column so it never has to be retyped into the "
+        "Teamcenter number when the revision moves on.", "Workbook")
+    ws.cell(row=3, column=I["OVR"]).comment = Comment(
         "Type a date here only when the automatic calculation cannot know something - a "
         "cross-system dependency, a site event. The Source column then reads Manual. "
         "Clear this cell to fall back to the automatic date.", "Workbook")
-    ws.cell(row=3, column=13).comment = Comment(
+    ws.cell(row=3, column=I["TARGET"]).comment = Comment(
         "Automatic = the commissioning start of whatever this row covers (actual start if "
         "one is filled in on SETUP, otherwise the planned start), minus the lead time of "
         "the type. Post-commissioning types are measured back from their anchor milestone "
         "instead. Blank means no start date is set for what this row covers.", "Workbook")
 
-    widths(ws, {"A": 34, "B": 11, "C": 12, "D": 26, "E": 20, "F": 18, "G": 7,
-                "H": 18, "I": 16, "J": 24, "K": 13, "L": 16, "M": 16, "N": 9,
-                "O": 16, "P": 10, "Q": 15, "R": 24, "S": 30,
-                "T": 12, "U": 12, "V": 8, "W": 8, "X": 9, "Y": 16,
-                "Z": 11, "AA": 11, "AB": 11})
-    for col in ("T", "U", "V", "W", "X", "Y", "Z", "AA", "AB"):
-        ws.column_dimensions[col].hidden = True
+    widths(ws, {"A": 34, "B": 11, "C": 12, "D": 26, "E": 18, "F": 7,
+                "G": 18, "H": 16, "I": 24, "J": 13, "K": 16, "L": 16, "M": 9,
+                "N": 16, "O": 10, "P": 15, "Q": 24, "R": 30,
+                "S": 12, "T": 12, "U": 8, "V": 8, "W": 9, "X": 16,
+                "Y": 11, "Z": 11, "AA": 11})
+    for key in ("SDATE", "AUTO", "ACTIVE", "DONE", "INACT", "PHASE",
+                "KLATE", "KWIP", "KCOME"):
+        ws.column_dimensions[TRK_COL[key]].hidden = True
 
     dv(ws, "TYP_TYPE", f"{K_TYPE}{TRK_TOP}:{K_TYPE}{TRK_BOT}")
     dv(ws, "SCOPE_LIST", f"{K_SCOPE}{TRK_TOP}:{K_SCOPE}{TRK_BOT}")
@@ -780,14 +808,14 @@ def build_tracker(ws):
         font=Font(name=FONT, size=9, bold=True, color="843C0C")))
 
     ws.auto_filter.ref = f"{K_TYPE}3:{K_CMT}{TRK_BOT}"
-    ws.freeze_panes = "F4"
+    ws.freeze_panes = "E4"
 
 
 # ===========================================================================
 # ACTIONS
 # ===========================================================================
 ACT_COLS = ["Action ID", "Description", "Phase", "System", "Equipment",
-            "Document no.", "Owner", "Actual start", "Due date", "Done date",
+            "Teamcenter no.", "Owner", "Actual start", "Due date", "Done date",
             "Status", "Days late", "State", "Comment"]
 
 
@@ -935,9 +963,9 @@ def build_lists(ws):
         tr = TRK_TOP + i
         ws.cell(row=r, column=12, value=f'=IF({TR}!${K_TYPE}{tr}="","","Document")')
         ws.cell(row=r, column=13, value=(
-            f'=IF($L{r}="","",{TR}!${K_NUM}{tr}'
-            f'&IF({TR}!${K_REV}{tr}="",""," rev "&{TR}!${K_REV}{tr})'
-            f'&"  -  "&{TR}!${K_TYPE}{tr})'))
+            f'=IF($L{r}="","",IF({TR}!${K_TCN}{tr}<>"",{TR}!${K_TCN}{tr}'
+            f'&IF({TR}!${K_REV}{tr}="",""," rev "&{TR}!${K_REV}{tr})&"  -  ","")'
+            f'&{TR}!${K_TYPE}{tr})'))
         ws.cell(row=r, column=14, value=(
             f'=IF($L{r}="","",IF({TR}!${K_SCOPE}{tr}="Equipment",{TR}!${K_EQP}{tr},'
             f'IF({TR}!${K_SCOPE}{tr}="System",{TR}!${K_SYS}{tr},"Whole contract")))'))
@@ -1332,10 +1360,10 @@ def build_how(ws):
                               "together.", None),
 
         ("SECTION", "READING THE TRACKER", None),
-        ("Document no. / Teamcenter no. / Rev.",
-         "Three separate columns on purpose. The contract document number and the Teamcenter "
-         "identifier each stay searchable on their own, and the revision moves on without the "
-         "number ever being retyped. Filter or sort on any of them.", None),
+        ("Teamcenter no. / Rev.",
+         "Two separate columns on purpose: the revision moves on without the Teamcenter "
+         "number ever being retyped. Both are optional metadata - a row is real and "
+         "coloured the moment Type is filled in, whether or not either is set yet.", None),
         ("Target override", "Type a date to force a target the calculation cannot know - a "
                             "cross-system dependency, a site event. The Source column then reads "
                             "Manual. Clear the cell to fall back to Auto.", None),
@@ -1481,7 +1509,7 @@ def add_names(wb):
         "DOC_SCOPE": f"{TR}!${K_SCOPE}${TRK_TOP}:${K_SCOPE}${TRK_BOT}",
         "DOC_SYS": f"{TR}!${K_SYS}${TRK_TOP}:${K_SYS}${TRK_BOT}",
         "DOC_EQP": f"{TR}!${K_EQP}${TRK_TOP}:${K_EQP}${TRK_BOT}",
-        "DOC_NUM": f"{TR}!${K_NUM}${TRK_TOP}:${K_NUM}${TRK_BOT}",
+        "DOC_NUM": f"{TR}!${K_TCN}${TRK_TOP}:${K_TCN}${TRK_BOT}",
         "DOC_TCN": f"{TR}!${K_TCN}${TRK_TOP}:${K_TCN}${TRK_BOT}",
         "DOC_REV": f"{TR}!${K_REV}${TRK_TOP}:${K_REV}${TRK_BOT}",
         "DOC_TARGET": f"{TR}!${K_TARGET}${TRK_TOP}:${K_TARGET}${TRK_BOT}",
@@ -1686,32 +1714,32 @@ def write_demo(wb):
         target = anchor_date - dt.timedelta(days=LEAD[dtype])
         days_to = (target - today).days
         code, done = _status(maturity, n, days_to)
-        key = sysid or "ALL"
-        tr.cell(row=row, column=1, value=dtype)
-        tr.cell(row=row, column=2, value=scope)
+        J = TRK_IDX
+        tr.cell(row=row, column=J["TYPE"], value=dtype)
+        tr.cell(row=row, column=J["SCOPE"], value=scope)
         if scope in ("System", "Equipment"):
-            tr.cell(row=row, column=3, value=sysid)
+            tr.cell(row=row, column=J["SYS"], value=sysid)
         if scope == "Equipment":
-            tr.cell(row=row, column=4, value=eq)
-        tr.cell(row=row, column=5,
-                value=f"DMIC-{key}-{ABBR.get(dtype,'DOC')}-{n:03d}")
-        tr.cell(row=row, column=6, value=f"TC-{6100000 + n * 37:07d}")
-        tr.cell(row=row, column=7, value="ABCDE"[min(4, (n % 7) // 2)])
-        tr.cell(row=row, column=8, value=DEMO_PPL[n % len(DEMO_PPL)][0])
-        tr.cell(row=row, column=9, value=DEMO_PPL[(n + 4) % len(DEMO_PPL)][0])
-        tr.cell(row=row, column=10, value=code)
+            tr.cell(row=row, column=J["EQP"], value=eq)
+        tr.cell(row=row, column=J["TCN"], value=f"TC-{6100000 + n * 37:07d}")
+        tr.cell(row=row, column=J["REV"], value="ABCDE"[min(4, (n % 7) // 2)])
+        tr.cell(row=row, column=J["RESP"], value=DEMO_PPL[n % len(DEMO_PPL)][0])
+        tr.cell(row=row, column=J["APPR"], value=DEMO_PPL[(n + 4) % len(DEMO_PPL)][0])
+        tr.cell(row=row, column=J["STAT"], value=code)
         if code and not done:
             st = target - dt.timedelta(days=45 + (n % 20))
             if st <= today:
-                c = tr.cell(row=row, column=11, value=st); c.number_format = FMT_DATE
+                c = tr.cell(row=row, column=J["ASTART"], value=st)
+                c.number_format = FMT_DATE
         if done:
             appr = target + dt.timedelta(days=(n % 11) - 5)
             if appr > today:
                 appr = today - dt.timedelta(days=n % 7)
-            c = tr.cell(row=row, column=15, value=appr); c.number_format = FMT_DATE
+            c = tr.cell(row=row, column=J["AAPPR"], value=appr)
+            c.number_format = FMT_DATE
         if n % 37 == 0:                       # a couple of cancelled documents
-            tr.cell(row=row, column=10, value="A2 - Superseded")
-            tr.cell(row=row, column=15, value=None)
+            tr.cell(row=row, column=J["STAT"], value="A2 - Superseded")
+            tr.cell(row=row, column=J["AAPPR"], value=None)
         row += 1
 
     for t in TYPES:
@@ -1730,9 +1758,9 @@ def write_demo(wb):
             eq_start[eq], MATURITY[sysid])
 
     # one deliberate override, to show the Source column working
-    tr.cell(row=TRK_TOP + 4, column=12,
+    tr.cell(row=TRK_TOP + 4, column=TRK_IDX["OVR"],
             value=today + dt.timedelta(days=21)).number_format = FMT_DATE
-    tr.cell(row=TRK_TOP + 4, column=19,
+    tr.cell(row=TRK_TOP + 4, column=TRK_IDX["CMT"],
             value="Target moved by agreement - waiting on the SYS-SG interface package.")
 
     acts = [
@@ -1820,11 +1848,12 @@ def write_example(wb):
     c.number_format = FMT_DATE
     c.fill = tag
 
-    vals = {1: "Commissioning Procedure", 2: "Equipment", 3: "SYS-01",
-            4: "EQ-001 Example equipment item", 5: "DMIC-SYS-01-CPR-001",
-            6: "TC-6100001", 7: "A",
-            8: "B. Example", 9: "C. Example", 10: "W1 - Draft",
-            19: "EXAMPLE ROW - overwrite with your first deliverable"}
+    K = TRK_IDX
+    vals = {K["TYPE"]: "Commissioning Procedure", K["SCOPE"]: "Equipment",
+            K["SYS"]: "SYS-01", K["EQP"]: "EQ-001 Example equipment item",
+            K["TCN"]: "TC-6100001", K["REV"]: "A",
+            K["RESP"]: "B. Example", K["APPR"]: "C. Example", K["STAT"]: "W1 - Draft",
+            K["CMT"]: "EXAMPLE ROW - overwrite with your first deliverable"}
     for col, v in vals.items():
         tr.cell(row=TRK_TOP, column=col, value=v).fill = tag
 

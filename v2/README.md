@@ -34,9 +34,12 @@ a blank target, and the `Check` column says so in words.
 
 ## Document identity
 
-Three separate columns on the TRACKER: **Document no.**, **Teamcenter no.** and
-**Rev.** Each stays searchable and filterable on its own, and a revision moves on
-without the number ever being retyped.
+Two columns on the TRACKER: **Teamcenter no.** and **Rev.** Both are optional
+metadata, not a gate — a row is real, counted, and coloured the moment **Type**
+is filled in, whatever else is still blank. (There was a third column,
+**Document no.**, in an earlier revision. It was removed: every colour and
+total formula gated on it being non-empty as well as Type, so a row typed in
+without a document number never lit up. Teamcenter no. and Rev. gate nothing.)
 
 ## SETUP is protected against row deletion
 
@@ -48,6 +51,17 @@ on that line; an empty line is ignored everywhere. There is no password, so
 Review → Unprotect Sheet lifts it for anyone who really means to restructure the
 sheet — and if a deletion does break a reference, a red banner appears at the top
 of the DASHBOARD rather than the lists silently emptying.
+
+Because rows can't be inserted either, running out of capacity in a SETUP
+section (more than 50 systems, more than 80 equipment, ...) isn't something to
+fix by hand in Excel — it means asking for the workbook to be regenerated with
+a bigger number. `build_v2.py` computes every SETUP section's row range from
+the section above it (`_section()`, near the top of the file), so raising
+`N_SYS`, `N_EQP`, `N_MS_SLOT`, or adding a `WF_CODES` / `TYPES` entry and
+rebuilding is the whole change — no row number anywhere else in the file needs
+touching. (An earlier revision hard-coded each section's starting row; raising
+`N_SYS` alone made the SYSTEMS section overrun into EQUIPMENT's first rows and
+broke both. That's fixed structurally now, not just for this one number.)
 
 ## Kept from v50
 
@@ -82,12 +96,12 @@ recalculate-to-zero-errors discipline.
 
 ## Capacity
 
-TRACKER 500 rows · ACTIONS 150 · systems 25 · equipment 80 · milestones 15 ·
+TRACKER 500 rows · ACTIONS 150 · systems 50 · equipment 80 · milestones 15 ·
 core types tracked for gaps 12.
 
 ## Verification
 
-Both files recalculate clean: 20 447 formulas, 0 errors (LibreOffice). Roll-ups
+Both files recalculate clean: 22 024 formulas, 0 errors (LibreOffice). Roll-ups
 hand-checked against the source data: contract earliest start, target-date
 arithmetic, share late, and gap totals reconcile across contract / system /
 equipment levels.
